@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Мини платформер</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            user-select: none;
+        }
+        body {
+            min-height: 100vh;
+            background: linear-gradient(135deg, #1a1e2c, #2a2f45);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-family: 'Courier New', monospace;
+        }
+        .game-wrapper {
+            background: #0b0d17;
+            padding: 20px;
+            border-radius: 28px;
+            box-shadow: 0 20px 30px rgba(0,0,0,0.6);
+        }
+        canvas {
+            display: block;
+            margin: 0 auto;
+            border-radius: 16px;
+            box-shadow: inset 0 0 10px #00ccff33, 0 0 0 2px #4e5a8b;
+            background: #141a2b;
+            cursor: none;
+        }
+        .panel {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 16px;
+            color: #b7eefc;
+            text-shadow: 0 0 5px #0ae0ff;
+            font-weight: bold;
+            font-size: 20px;
+            padding: 0 8px;
+        }
+        button {
+            background: #2f3b6b;
+            border: none;
+            color: white;
+            font-weight: bold;
+            font-size: 18px;
+            padding: 8px 22px;
+            border-radius: 50px;
+            box-shadow: 0 5px 0 #12162c, 0 8px 12px black;
+            cursor: pointer;
+            transition: 0.08s linear;
+            font-family: inherit;
+            letter-spacing: 1px;
+        }
+        button:active {
+            transform: translateY(5px);
+            box-shadow: 0 2px 0 #12162c, 0 5px 10px black;
+        }
+        .info span {
+            color: #feda7a;
+            font-size: 24px;
+            margin-left: 8px;
+        }
+    </style>
+</head>
+<body>
+<div class="game-wrapper">
+    <canvas id="gameCanvas" width="600" height="400"></canvas>
+    <div class="panel">
+        <div class="info">💰 <span id="coinCounter">0</span></div>
+        <button id="restartBtn">⟳ рестарт</button>
+    </div>
+</div>
+
+<script>
+    (function() {
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const coinSpan = document.getElementById('coinCounter');
+        const restartBtn = document.getElementById('restartBtn');
+
+        // Размеры мира
+        const GROUND_Y = 360;        // пол (немного выше низа)
+        const GRAVITY = 0.5;
+        const JUMP_FORCE = -11;
+        const MOVE_SPEED = 4;
+
+        // Платформы: [x, y, width, height]
+        const platforms = [
+            [80, 300, 120, 12],      // левая нижняя
+            [280, 250, 100, 12],      // средняя
+            [450, 200, 110, 12],      // правая
+            [150, 150, 100, 12],      // верхняя левая
+            [400, 100, 120, 12],      // верхняя правая
+            [20, 220, 70, 12]         // маленькая слева
+        ];
+
+        // Монетки (спавнятся рядом с платформами)
+        let coins = [
+            { x: 120, y: 270, r: 9, collected: false },
+            { x: 320, y: 220, r: 9, collected: false },
+            { x: 500, y: 170, r: 9, collected: false },
+            { x: 190, y: 120, r: 9, collected: false },
+            { x: 440, y: 70, r: 9, collected: false },
+            { x: 50, y: 190, r: 9, collected: false }
+        ];
+
+        // Игрок
+        let player = {
+            x: 100, y: 330,
+            w: 22, h: 22,
+            vx: 0, vy: 0,
+            grounded: false
+        };
+
+        let coinsCollected = 0;
+        let gameOver = false;
+
+        // ---- Ввод с клавиатуры ----
+        const keys = {
+            left: false,
+            right: false,
+            up: false,
+            jumpUsed: false   // чтобы не было бесконечного прыжка в удержании
+        };
+
+        window.addEventListener('keydown', (e) => {
+            if (gameOver) return;
+            const key = e.key;
+            if (key === 'ArrowLeft' || key === 'a' || key === 'A') {
+                keys.left = true;
+                e.preventDefault();
+            } else if (key === 'ArrowRight' || key === 'd' || key === 'D') {
+                keys.right = true;
+                e.preventDefault();
+            } else if (key === 'ArrowUp' || key === 'w' || key === 'W' || key === ' ') {
+                // прыжок
+                if (!keys.up) {  // первое нажатие
+                    if (player.grounded) {
+                        player.vy = JUMP_FORCE;
+                        player.grounded = false;
+                        keys.jumpUsed = true;
+                    }
+                }
+                keys.up = true;
+                e.preventDefault();
+            }
+        });
+
+        window.addEventListener('keyup', (e) => {
+            const key = e.key;
+            if (key === 'ArrowLeft' || key === 'a' || key === 'A') {
+                keys.left = false;
+                e.preventDefault();
+            } else if (key === 'ArrowRight' || key === 'd' || key === 'D') {
+                keys.right = false;
+                e.preventDefault();
+            } else if (key === 'ArrowUp' || key === 'w' || key === 'W' || key === ' ') {
+                keys.up = false;
+                keys.jumpUsed = false;   // сброс, чтобы можно было прыгнуть снова
+                e.preventDefault();
+            }
+        });
+
+        // Запрет прокрутки стрелками
+        window.addEventListener('keydown', (e) => {
+            if (e.key.startsWith('Arrow') || e.key === ' ') {
+                e.preventDefault();
+            }
+        }, { passive: false });
+
+        // ---- Рестарт ----
+        function restartGame() {
+            player = {
+                x: 100, y: 330,
+                w: 22, h: 22,
+                vx: 0, vy: 0,
+                grounded: false
+            };
+            coins.forEach(c => c.collected = false);
+            coinsCollected = 0;
+            gameOver = false;
+            keys.left = false;
+            keys.right = false;
+            keys.up = false;
+            keys.jumpUsed = false;
+            coinSpan.textContent = '0';
+        }
+
+        restartBtn.addEventListener('click', restartGame);
+
+        // ---- Физика и столкновения ----
+        function applyCollisions() {
+            // Горизонтальное движение + столкновения с платформами
+            player.x += player.vx;
+
+            // Столкновения с платформами по горизонтали
+            for (let p of platforms) {
+                if (player.y + player.h > p[1] && player.y < p[1] + p[3]) {
+                    if (player.vx > 0 && player.x + player.w > p[0] && player.x < p[0]) {
+                        player.x = p[0] - player.w;
+                    } else if (player.vx < 0 && player.x < p[0] + p[2] && player.x + player.w > p[0] + p[2]) {
+                        player.x = p[0] + p[2];
+                    }
+                }
+            }
+
+            // Гравитация
+            player.vy += GRAVITY;
+            player.y += player.vy;
+
+            // Вертикальные столкновения + grounded
+            player.grounded = false;
+            for (let p of platforms) {
+                if (player.x + player.w > p[0] && player.x < p[0] + p[2]) {
+                    if (player.vy >= 0 && player.y + player.h > p[1] && player.y < p[1]) {
+                        player.y = p[1] - player.h;
+                        player.vy = 0;
+                        player.grounded = true;
+                    } else if (player.vy < 0 && player.y < p[1] + p[3] && player.y + player.h > p[1] + p[3]) {
+                        player.y = p[1] + p[3];
+                        player.vy = 0;
+                    }
+                }
+            }
+
+            // Пол (земля) — как невидимая платформа внизу
+            if (player.y + player.h > GROUND_Y) {
+                player.y = GROUND_Y - player.h;
+                player.vy = 0;
+                player.grounded = true;
+            }
+
+            // Не даём уйти за левый/правый край
+            if (player.x < 0) player.x = 0;
+            if (player.x + player.w > canvas.width) player.x = canvas.width - player.w;
+
+            // Если упал ниже смерти (но у нас есть пол, на всякий случай)
+            if (player.y > canvas.height) {
+                player.y = GROUND_Y - player.h;
+                player.vy = 0;
+                player.grounded = true;
+            }
+        }
+
+        // ---- Сбор монет ----
+        function collectCoins() {
+            for (let c of coins) {
+                if (!c.collected) {
+                    const dx = (player.x + player.w/2) - c.x;
+                    const dy = (player.y + player.h/2) - c.y;
+                    const dist = Math.sqrt(dx*dx + dy*dy);
+                    if (dist < c.r + player.w/2) {
+                        c.collected = true;
+                        coinsCollected++;
+                        coinSpan.textContent = coinsCollected;
+                    }
+                }
+            }
+        }
+
+        // ---- Отрисовка ----
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Фон (лёгкая текстура)
+            ctx.fillStyle = '#1e263f';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            for (let i = 0; i < canvas.width; i+= 25) {
+                ctx.strokeStyle = '#2f3b6633';
+                ctx.beginPath();
+                ctx.moveTo(i, 0);
+                ctx.lineTo(i, canvas.height);
+                ctx.stroke();
+            }
+
+            // Платформы
+            ctx.shadowColor = '#60d6ff';
+            ctx.shadowBlur = 12;
+            for (let p of platforms) {
+                ctx.fillStyle = '#59c7eb';
+                ctx.fillRect(p[0], p[1], p[2], p[3]);
+                ctx.fillStyle = '#9ae5ff';
+                ctx.fillRect(p[0]+2, p[1]-2, p[2]-4, 4);
+            }
+
+            // Монетки
+            for (let c of coins) {
+                if (!c.collected) {
+                    ctx.shadowBlur = 18;
+                    ctx.shadowColor = '#f0b000';
+                    ctx.beginPath();
+                    ctx.arc(c.x, c.y, c.r, 0, 2*Math.PI);
+                    ctx.fillStyle = '#f7d44a';
+                    ctx.fill();
+                    ctx.fillStyle = '#f29c12';
+                    ctx.beginPath();
+                    ctx.arc(c.x-2, c.y-2, 3, 0, 2*Math.PI);
+                    ctx.fill();
+                }
+            }
+
+            // Игрок (квадратик с глазами)
+            ctx.shadowBlur = 20;
+            ctx.shadowColor = '#3da5ff';
+            ctx.fillStyle = '#78d6ff';
+            ctx.fillRect(player.x, player.y, player.w, player.h);
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(player.x+4, player.y+5, 4, 4);
+            ctx.fillRect(player.x+14, player.y+5, 4, 4);
+            ctx.fillStyle = '#141414';
+            ctx.fillRect(player.x+5, player.y+6, 2, 2);
+            ctx.fillRect(player.x+15, player.y+6, 2, 2);
+
+            // Подпись grounded (для отладки, но оставим как шарм)
+            ctx.shadowBlur = 0;
+            ctx.font = 'bold 12px monospace';
+            ctx.fillStyle = '#aaddff';
+            ctx.fillText('стрелки ← ↑ →', 430, 30);
+
+            // Если gameOver не используется, но можно оставить заглушку
+        }
+
+        // ---- Обновление логики каждый кадр ----
+        function update() {
+            if (!gameOver) {
+                // Управление скоростью
+                if (keys.left) {
+                    player.vx = -MOVE_SPEED;
+                } else if (keys.right) {
+                    player.vx = MOVE_SPEED;
+                } else {
+                    player.vx *= 0.7;  // трение
+                }
+
+                // Прыжок обрабатывается в keydown (мгновенно), но также можно и здесь 
+                // для удержания? Оставим так, прыжок только в keydown, чтоб не летал.
+
+                applyCollisions();
+                collectCoins();
+            }
+            draw();
+            requestAnimationFrame(update);
+        }
+
+        // Запуск игры
+        restartGame(); // начальное состояние
+        update();
+    })();
+</script>
+</body>
+</html>
